@@ -46,17 +46,6 @@
   .app-subtitle { font-size: 10px; color: var(--text-tertiary); font-weight: 500; margin-top: 1px; transition: all 0.3s; }
 
   .header-center { display: flex; align-items: center; gap: 6px; }
-  .model-toggle {
-    display: flex; background: var(--bg-surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 2px; gap: 2px;
-  }
-  .model-btn {
-    padding: 5px 14px; border: none; border-radius: 8px; font-family: inherit;
-    font-size: 11px; font-weight: 600; cursor: pointer;
-    transition: all 0.2s; background: transparent; color: var(--text-tertiary);
-  }
-  .model-btn.active { background: var(--accent); color: #fff; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent); }
-  .model-btn:hover:not(.active) { color: var(--text-secondary); background: var(--bg-hover); }
 
   .header-right { display: flex; align-items: center; gap: 10px; }
   .pb-badge {
@@ -255,12 +244,7 @@
       <div class="app-subtitle" id="headerSub">AI Cooking Assistant</div>
     </div>
   </div>
-  <div class="header-center">
-    <div class="model-toggle">
-      <button class="model-btn" data-model="claude" onclick="setModel('claude')">Claude</button>
-      <button class="model-btn active" data-model="chatgpt" onclick="setModel('chatgpt')">ChatGPT</button>
-    </div>
-  </div>
+  <div class="header-center"></div>
   <div class="header-right">
     <div class="pb-badge">
       <svg viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="4" height="12" rx="1" fill="#6366f1"/><rect x="6" y="5" width="4" height="9" rx="1" fill="#818cf8"/><rect x="11" y="1" width="4" height="13" rx="1" fill="#a78bfa"/></svg>
@@ -276,7 +260,7 @@
 <div class="vertical-bar" id="verticalBar"></div>
 
 <div class="config-banner" id="configBanner">
-  API keys not set. Export <code>OPENAI_API_KEY</code> or <code>ANTHROPIC_API_KEY</code> and restart.
+  API key not set. Export <code>OPENAI_API_KEY</code> and restart.
 </div>
 
 <div class="chat-area" id="chatArea">
@@ -300,7 +284,7 @@
       </button>
     </div>
     <div class="input-hint">
-      <span>Powered by Claude & ChatGPT</span>
+      <span>Powered by ChatGPT</span>
       <span>Ads by PromptBid</span>
     </div>
   </div>
@@ -309,7 +293,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
 <script>
 let sessionId = null;
-let currentModel = 'chatgpt';
 let currentVertical = 'chef';
 let sending = false;
 let streamingBubble = null;
@@ -338,13 +321,11 @@ fetch('/api/verticals').then(r => r.json()).then(data => {
 });
 
 fetch('/health').then(r => r.json()).then(data => {
-  if (!data.claude_configured && !data.chatgpt_configured) {
+  if (!data.chatgpt_configured) {
     document.getElementById('configBanner').classList.add('visible');
     document.getElementById('statusDot').style.background = '#f59e0b';
     document.getElementById('statusText').textContent = 'No API Key';
   }
-  if (data.claude_configured && !data.chatgpt_configured) setModel('claude');
-  if (!data.claude_configured && data.chatgpt_configured) setModel('chatgpt');
 }).catch(() => {
   document.getElementById('statusDot').style.background = '#f43f5e';
   document.getElementById('statusText').textContent = 'Offline';
@@ -414,11 +395,6 @@ function switchVertical(key) {
   messageInput.focus();
 }
 
-function setModel(model) {
-  currentModel = model;
-  document.querySelectorAll('.model-btn').forEach(b => b.classList.toggle('active', b.dataset.model === model));
-}
-
 async function sendMessage() {
   const text = messageInput.value.trim();
   if (!text || sending) return;
@@ -434,7 +410,7 @@ async function sendMessage() {
   try {
     const resp = await fetch('/chat/stream', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, session_id: sessionId, model: currentModel, vertical: currentVertical }),
+      body: JSON.stringify({ message: text, session_id: sessionId, vertical: currentVertical }),
     });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -451,14 +427,14 @@ async function sendMessage() {
           if (data.type === 'token') { streamingBubble.tokens.push(data.text); renderStream(); }
           else if (data.type === 'done') {
             sessionId = data.session_id;
-            finishStream(data.model);
+            finishStream();
             if (data.ad) setTimeout(() => addAd(data.ad), 400);
           }
         } catch(e) {}
       }
     }
   } catch(err) {
-    if (streamingBubble) { streamingBubble.tokens = ['_Could not reach server._']; renderStream(); finishStream('error'); }
+    if (streamingBubble) { streamingBubble.tokens = ['_Could not reach server._']; renderStream(); finishStream(); }
   }
   sending = false; sendBtn.disabled = false; messageInput.focus();
 }
@@ -497,16 +473,9 @@ function renderStream() {
   scroll();
 }
 
-function finishStream(model) {
+function finishStream() {
   if (!streamingBubble) return;
   streamingBubble.bubble.innerHTML = renderMd(streamingBubble.tokens.join(''));
-  if (model && model !== 'error') {
-    const m = document.createElement('div'); m.className = 'msg-meta';
-    const n = model === 'claude' ? 'Claude' : model === 'chatgpt' ? 'ChatGPT' : model;
-    const clr = model === 'claude' ? '#d97706' : '#10b981';
-    m.innerHTML = `<span class="model-tag"><span style="width:4px;height:4px;border-radius:50%;background:${clr};display:inline-block"></span>${n}</span>`;
-    streamingBubble.bubble.parentElement.appendChild(m);
-  }
   streamingBubble = null;
 }
 

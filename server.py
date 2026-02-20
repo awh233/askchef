@@ -8,7 +8,6 @@ Streaming responses via SSE + OpenRTB 2.6 bid requests per conversation.
 
 Usage:
     pip install -r requirements.txt
-    export ANTHROPIC_API_KEY=sk-ant-...
     export OPENAI_API_KEY=sk-...
     export PROMPTBID_API_KEY=pb_live_...
     export PROMPTBID_BASE_URL=http://localhost:8080
@@ -29,7 +28,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # ── Config ──
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 PROMPTBID_API_KEY = os.getenv("PROMPTBID_API_KEY", "")
 PROMPTBID_BASE_URL = os.getenv("PROMPTBID_BASE_URL", "http://localhost:8080")
@@ -178,7 +176,6 @@ sessions: dict = {}
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
-    model: str = "chatgpt"
     vertical: str = "chef"
 
 
@@ -187,49 +184,6 @@ class ClickRequest(BaseModel):
 
 
 # ── Streaming AI ──
-async def stream_claude(messages: list[dict], system: str):
-    if not ANTHROPIC_API_KEY:
-        yield "_Claude API key not configured._ Set `ANTHROPIC_API_KEY` to enable."
-        return
-
-    async with httpx.AsyncClient(timeout=60) as client:
-        async with client.stream(
-            "POST", "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514"),
-                "max_tokens": 1024,
-                "stream": True,
-                "system": system,
-                "messages": messages,
-            },
-        ) as resp:
-            if resp.status_code != 200:
-                body = await resp.aread()
-                err = body.decode()[:200]
-                print(f"Claude API error {resp.status_code}: {err}")
-                yield f"_Claude API error ({resp.status_code})._ {err}"
-                return
-
-            async for line in resp.aiter_lines():
-                if line.startswith("data: "):
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(data_str)
-                        if data.get("type") == "content_block_delta":
-                            text = data.get("delta", {}).get("text", "")
-                            if text:
-                                yield text
-                    except json.JSONDecodeError:
-                        pass
-
-
 async def stream_chatgpt(messages: list[dict], system: str):
     if not OPENAI_API_KEY:
         yield "_OpenAI API key not configured._ Set `OPENAI_API_KEY` to enable."
@@ -416,7 +370,7 @@ async def chat_stream(req: ChatRequest):
 
     async def event_stream():
         full_response = []
-        gen = stream_chatgpt(context_messages, v["system"]) if req.model == "chatgpt" else stream_claude(context_messages, v["system"])
+        gen = stream_chatgpt(context_messages, v["system"])
         async for chunk in gen:
             full_response.append(chunk)
             yield f"data: {json.dumps({'type': 'token', 'text': chunk})}\n\n"
@@ -432,7 +386,7 @@ async def chat_stream(req: ChatRequest):
             if ad:
                 session["last_ad_turn"] = session["turn_count"]
 
-        yield f"data: {json.dumps({'type': 'done', 'session_id': session_id, 'model': req.model, 'turn': session['turn_count'], 'ad': ad})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'session_id': session_id, 'turn': session['turn_count'], 'ad': ad})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -459,7 +413,6 @@ async def health():
         "status": "ok",
         "version": "3.0.0",
         "verticals": list(VERTICALS.keys()),
-        "claude_configured": bool(ANTHROPIC_API_KEY),
         "chatgpt_configured": bool(OPENAI_API_KEY),
         "promptbid_configured": bool(PROMPTBID_API_KEY),
         "promptbid_url": PROMPTBID_BASE_URL,
