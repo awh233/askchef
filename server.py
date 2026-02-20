@@ -123,7 +123,7 @@ async def stream_claude(messages: list[dict]):
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-sonnet-4-20250514",
+                "model": os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514"),
                 "max_tokens": 1024,
                 "stream": True,
                 "system": SYSTEM_PROMPT,
@@ -131,7 +131,10 @@ async def stream_claude(messages: list[dict]):
             },
         ) as resp:
             if resp.status_code != 200:
-                yield f"_Claude API error ({resp.status_code})._"
+                body = await resp.aread()
+                err = body.decode()[:200]
+                print(f"Claude API error {resp.status_code}: {err}")
+                yield f"_Claude API error ({resp.status_code})._ {err}"
                 return
 
             async for line in resp.aiter_lines():
@@ -175,7 +178,10 @@ async def stream_chatgpt(messages: list[dict]):
             },
         ) as resp:
             if resp.status_code != 200:
-                yield f"_ChatGPT API error ({resp.status_code})._"
+                body = await resp.aread()
+                err = body.decode()[:200]
+                print(f"ChatGPT API error {resp.status_code}: {err}")
+                yield f"_ChatGPT API error ({resp.status_code})._ {err}"
                 return
 
             async for line in resp.aiter_lines():
