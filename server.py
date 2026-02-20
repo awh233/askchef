@@ -1,11 +1,11 @@
 """
 AskChef — AI Cooking Assistant powered by Claude/ChatGPT + PromptBid Ads
 
-A demo app showing the full PromptBid SDK integration:
+A demo app showing the full PromptBid SDK integration with streaming responses:
   1. User sends a message
-  2. Backend calls Claude or ChatGPT for the AI response
+  2. Backend streams the AI response token-by-token via SSE
   3. Backend fires a bid request to PromptBid with conversation context
-  4. If an ad wins the auction, it's returned alongside the AI response
+  4. If an ad wins the auction, it's returned after the stream completes
   5. Frontend renders the ad as a native card in the conversation
 
 Usage:
@@ -13,7 +13,7 @@ Usage:
     export ANTHROPIC_API_KEY=sk-ant-...
     export OPENAI_API_KEY=sk-...
     export PROMPTBID_API_KEY=pb_live_...
-    export PROMPTBID_BASE_URL=http://localhost:8080  # or https://promptbiddev.onrender.com
+    export PROMPTBID_BASE_URL=http://localhost:8080
     python server.py
 """
 
@@ -21,15 +21,13 @@ import os
 import json
 import uuid
 import time
-import asyncio
 import re
 from typing import Optional
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -52,12 +50,15 @@ SYSTEM_PROMPT = """You are AskChef, a friendly and knowledgeable AI cooking assi
 - Dietary guidance (vegetarian, vegan, gluten-free, etc.)
 - Kitchen equipment recommendations
 
-Keep responses conversational, practical, and concise (2-4 paragraphs max).
-Use bold for recipe names and key terms. Include specific measurements and times.
-If someone asks about something non-food related, gently steer back to cooking."""
+Keep responses conversational, practical, and helpful.
+Use **bold** for recipe names, key ingredients, and important terms.
+Use numbered lists for step-by-step instructions.
+Include specific measurements, temperatures, and times.
+Add a brief tip or variation at the end when relevant.
+If someone asks about something non-food related, gently steer back to cooking with humor."""
 
 # ── App ──
-app = FastAPI(title="AskChef", version="1.0.0")
+app = FastAPI(title="AskChef", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -66,14 +67,14 @@ app.add_middleware(
 )
 
 # ── Session state ──
-sessions: dict = {}  # session_id -> { messages: [], turn_count: int, last_ad_turn: int }
+sessions: dict = {}
 
 
 # ── Models ──
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
-    model: str = "claude"  # "claude" or "chatgpt"
+    model: str = "chatgpt"
 
 
 class ClickRequest(BaseModel):
@@ -99,22 +100,22 @@ FOOD_KEYWORDS = {
 
 
 def extract_keywords(text: str) -> list[str]:
-    """Extract food/cooking keywords from user message."""
     words = set(re.findall(r'\b[a-z]+(?:-[a-z]+)?\b', text.lower()))
     found = words & FOOD_KEYWORDS
-    # Always include base keywords
     result = list(found | {"cooking", "food", "recipes"})
-    return result[:15]  # Cap at 15 keywords for the bid request
+    return result[:15]
 
 
-# ── AI Chat ──
-async def call_claude(messages: list[dict]) -> str:
-    """Call Anthropic Claude API."""
+# ── Streaming AI Chat ──
+async def stream_claude(messages: list[dict]):
+    """Stream from Anthropic Claude API using SSE."""
     if not ANTHROPIC_API_KEY:
-        return "_Claude API key not configured._ Set `ANTHROPIC_API_KEY` env var to enable Claude responses."
+        yield "_Claude API key not configured._ Set `ANTHROPIC_API_KEY` to enable."
+        return
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream(
+            "POST",
             "https://api.anthropic.com/v1/messages",
             headers={
                 "x-api-key": ANTHROPIC_API_KEY,
@@ -124,28 +125,43 @@ async def call_claude(messages: list[dict]) -> str:
             json={
                 "model": "claude-sonnet-4-20250514",
                 "max_tokens": 1024,
+                "stream": True,
                 "system": SYSTEM_PROMPT,
                 "messages": messages,
             },
-        )
-        if resp.status_code != 200:
-            return f"_Claude API error ({resp.status_code})._ Check your API key."
-        data = resp.json()
-        return data["content"][0]["text"]
+        ) as resp:
+            if resp.status_code != 200:
+                yield f"_Claude API error ({resp.status_code})._"
+                return
+
+            async for line in resp.aiter_lines():
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_str)
+                        if data.get("type") == "content_block_delta":
+                            text = data.get("delta", {}).get("text", "")
+                            if text:
+                                yield text
+                    except json.JSONDecodeError:
+                        pass
 
 
-async def call_chatgpt(messages: list[dict]) -> str:
-    """Call OpenAI ChatGPT API."""
+async def stream_chatgpt(messages: list[dict]):
+    """Stream from OpenAI ChatGPT API using SSE."""
     if not OPENAI_API_KEY:
-        return "_OpenAI API key not configured._ Set `OPENAI_API_KEY` env var to enable ChatGPT responses."
+        yield "_OpenAI API key not configured._ Set `OPENAI_API_KEY` to enable."
+        return
 
-    # Convert from Anthropic format to OpenAI format
     oai_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for m in messages:
         oai_messages.append({"role": m["role"], "content": m["content"]})
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream(
+            "POST",
             "https://api.openai.com/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -154,42 +170,62 @@ async def call_chatgpt(messages: list[dict]) -> str:
             json={
                 "model": "gpt-4o-mini",
                 "max_tokens": 1024,
+                "stream": True,
                 "messages": oai_messages,
             },
-        )
-        if resp.status_code != 200:
-            return f"_ChatGPT API error ({resp.status_code})._ Check your API key."
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        ) as resp:
+            if resp.status_code != 200:
+                yield f"_ChatGPT API error ({resp.status_code})._"
+                return
+
+            async for line in resp.aiter_lines():
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_str)
+                        delta = data.get("choices", [{}])[0].get("delta", {})
+                        text = delta.get("content", "")
+                        if text:
+                            yield text
+                    except json.JSONDecodeError:
+                        pass
+
+
+# ── Non-streaming fallback (for ad context) ──
+async def call_ai(messages: list[dict], model: str) -> str:
+    full = []
+    gen = stream_chatgpt(messages) if model == "chatgpt" else stream_claude(messages)
+    async for chunk in gen:
+        full.append(chunk)
+    return "".join(full)
 
 
 # ── PromptBid Ad Request ──
 async def request_ad(session_id: str, keywords: list[str]) -> Optional[dict]:
-    """Send a bid request to PromptBid and return the winning ad if any."""
     if not PROMPTBID_API_KEY:
         return None
 
     bid_request = {
         "id": str(uuid.uuid4()),
-        "imp": [
-            {
-                "id": "1",
-                "native": {
-                    "request": json.dumps({
-                        "ver": "1.2",
-                        "assets": [
-                            {"id": 0, "required": 1, "title": {"len": 90}},
-                            {"id": 1, "required": 1, "data": {"type": 1, "len": 200}},
-                            {"id": 2, "required": 0, "data": {"type": 12, "len": 20}},
-                            {"id": 3, "required": 0, "img": {"type": 3, "w": 320, "h": 200}},
-                        ],
-                    }),
+        "imp": [{
+            "id": "1",
+            "native": {
+                "request": json.dumps({
                     "ver": "1.2",
-                },
-                "bidfloor": 0.5,
-                "bidfloorcur": "USD",
-            }
-        ],
+                    "assets": [
+                        {"id": 0, "required": 1, "title": {"len": 90}},
+                        {"id": 1, "required": 1, "data": {"type": 1, "len": 200}},
+                        {"id": 2, "required": 0, "data": {"type": 12, "len": 20}},
+                        {"id": 3, "required": 0, "img": {"type": 3, "w": 320, "h": 200}},
+                    ],
+                }),
+                "ver": "1.2",
+            },
+            "bidfloor": 0.5,
+            "bidfloorcur": "USD",
+        }],
         "app": {
             "name": APP_NAME,
             "bundle": APP_BUNDLE,
@@ -197,17 +233,9 @@ async def request_ad(session_id: str, keywords: list[str]) -> Optional[dict]:
             "keywords": ",".join(keywords),
             "publisher": {"id": "askchef-demo"},
         },
-        "device": {
-            "ua": "AskChef/1.0 (Demo App)",
-            "ip": "127.0.0.1",
-            "os": "web",
-            "js": 1,
-            "connectiontype": 2,
-        },
-        "user": {
-            "id": session_id,
-        },
-        "at": 2,  # Second-price auction
+        "device": {"ua": "AskChef/2.0", "ip": "127.0.0.1", "os": "web", "js": 1},
+        "user": {"id": session_id},
+        "at": 2,
         "cur": ["USD"],
     }
 
@@ -215,15 +243,11 @@ async def request_ad(session_id: str, keywords: list[str]) -> Optional[dict]:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(
                 f"{PROMPTBID_BASE_URL}/api/v1/bid/request",
-                headers={
-                    "X-API-Key": PROMPTBID_API_KEY,
-                    "Content-Type": "application/json",
-                },
+                headers={"X-API-Key": PROMPTBID_API_KEY, "Content-Type": "application/json"},
                 json=bid_request,
             )
             if resp.status_code != 200:
                 return None
-
             data = resp.json()
             seatbids = data.get("seatbid", [])
             if not seatbids or not seatbids[0].get("bid"):
@@ -231,23 +255,16 @@ async def request_ad(session_id: str, keywords: list[str]) -> Optional[dict]:
 
             bid = seatbids[0]["bid"][0]
             adm_raw = bid.get("adm", "{}")
-
-            # Parse native markup
             try:
                 adm = json.loads(adm_raw) if isinstance(adm_raw, str) else adm_raw
             except json.JSONDecodeError:
                 adm = {}
 
-            # Extract creative fields from native assets
-            headline = ""
-            description = ""
-            cta_text = "Learn More"
-            cta_url = ""
-            image_url = ""
+            headline = description = cta_text = cta_url = image_url = ""
             impression_id = bid.get("id", "")
+            cta_text = "Learn More"
 
-            assets = adm.get("assets", [])
-            for asset in assets:
+            for asset in adm.get("assets", []):
                 if asset.get("title"):
                     headline = asset["title"].get("text", "")
                 elif asset.get("data"):
@@ -261,14 +278,11 @@ async def request_ad(session_id: str, keywords: list[str]) -> Optional[dict]:
 
             link = adm.get("link", {})
             cta_url = link.get("url", "")
-
-            # Get impression tracker
             imp_trackers = adm.get("imptrackers", [])
             imp_url = imp_trackers[0] if imp_trackers else f"{PROMPTBID_BASE_URL}/api/v1/bid/imp?impid={impression_id}"
 
             if not headline:
                 return None
-
             return {
                 "impression_id": impression_id,
                 "headline": headline,
@@ -279,7 +293,6 @@ async def request_ad(session_id: str, keywords: list[str]) -> Optional[dict]:
                 "imp_tracker": imp_url,
                 "price": bid.get("price", 0),
             }
-
     except Exception:
         return None
 
@@ -287,43 +300,64 @@ async def request_ad(session_id: str, keywords: list[str]) -> Optional[dict]:
 # ── Routes ──
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
-    return FileResponse(
-        os.path.join(os.path.dirname(__file__), "index.html"),
-        media_type="text/html",
-    )
+    return FileResponse(os.path.join(os.path.dirname(__file__), "index.html"), media_type="text/html")
+
+
+@app.post("/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """SSE endpoint that streams AI response tokens, then sends ad data."""
+    session_id = req.session_id or str(uuid.uuid4())
+
+    if session_id not in sessions:
+        sessions[session_id] = {"messages": [], "turn_count": 0, "last_ad_turn": -3}
+
+    session = sessions[session_id]
+    session["turn_count"] += 1
+    session["messages"].append({"role": "user", "content": req.message})
+    context_messages = session["messages"][-20:]
+
+    async def event_stream():
+        full_response = []
+
+        # Stream AI tokens
+        gen = stream_chatgpt(context_messages) if req.model == "chatgpt" else stream_claude(context_messages)
+        async for chunk in gen:
+            full_response.append(chunk)
+            yield f"data: {json.dumps({'type': 'token', 'text': chunk})}\n\n"
+
+        ai_text = "".join(full_response)
+        session["messages"].append({"role": "assistant", "content": ai_text})
+
+        # Check for ad
+        ad = None
+        turns_since_ad = session["turn_count"] - session["last_ad_turn"]
+        if session["turn_count"] >= 2 and turns_since_ad >= 3:
+            keywords = extract_keywords(req.message + " " + ai_text)
+            ad = await request_ad(session_id, keywords)
+            if ad:
+                session["last_ad_turn"] = session["turn_count"]
+
+        # Send done event with session info and optional ad
+        yield f"data: {json.dumps({'type': 'done', 'session_id': session_id, 'model': req.model, 'turn': session['turn_count'], 'ad': ad})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    """Non-streaming fallback."""
     session_id = req.session_id or str(uuid.uuid4())
-
-    # Initialize session
     if session_id not in sessions:
-        sessions[session_id] = {
-            "messages": [],
-            "turn_count": 0,
-            "last_ad_turn": -3,  # Allow ad on first eligible turn
-        }
+        sessions[session_id] = {"messages": [], "turn_count": 0, "last_ad_turn": -3}
 
     session = sessions[session_id]
     session["turn_count"] += 1
-
-    # Add user message to history
     session["messages"].append({"role": "user", "content": req.message})
-
-    # Keep last 20 messages for context
     context_messages = session["messages"][-20:]
 
-    # Call AI
-    if req.model == "chatgpt":
-        ai_response = await call_chatgpt(context_messages)
-    else:
-        ai_response = await call_claude(context_messages)
-
-    # Add assistant response to history
+    ai_response = await call_ai(context_messages, req.model)
     session["messages"].append({"role": "assistant", "content": ai_response})
 
-    # Decide whether to show an ad (every ~3 turns, not on first message)
     ad = None
     turns_since_ad = session["turn_count"] - session["last_ad_turn"]
     if session["turn_count"] >= 2 and turns_since_ad >= 3:
@@ -343,18 +377,13 @@ async def chat(req: ChatRequest):
 
 @app.post("/click")
 async def track_click(req: ClickRequest):
-    """Proxy click tracking to PromptBid."""
     if not PROMPTBID_API_KEY:
-        return {"success": False, "error": "Not configured"}
-
+        return {"success": False}
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(
                 f"{PROMPTBID_BASE_URL}/api/v1/bid/click",
-                headers={
-                    "X-API-Key": PROMPTBID_API_KEY,
-                    "Content-Type": "application/json",
-                },
+                headers={"X-API-Key": PROMPTBID_API_KEY, "Content-Type": "application/json"},
                 json={"impression_id": req.impression_id},
             )
             return resp.json()
@@ -367,6 +396,7 @@ async def health():
     return {
         "status": "ok",
         "app": APP_NAME,
+        "version": "2.0.0",
         "claude_configured": bool(ANTHROPIC_API_KEY),
         "chatgpt_configured": bool(OPENAI_API_KEY),
         "promptbid_configured": bool(PROMPTBID_API_KEY),
@@ -375,9 +405,5 @@ async def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "server:app",
-        host="0.0.0.0",
-        port=3001,
-        reload=True,
-    )
+    port = int(os.getenv("PORT", "3001"))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=os.getenv("RENDER") is None)
