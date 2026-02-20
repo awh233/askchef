@@ -178,6 +178,20 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     vertical: str = "chef"
 
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "message": "Help me make pasta",
+                "session_id": None,
+                "vertical": "chef"
+            }
+        }
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if len(self.message) > 2000:
+            raise ValueError("Message length cannot exceed 2000 characters")
+
 
 class ClickRequest(BaseModel):
     impression_id: str
@@ -193,7 +207,7 @@ async def stream_chatgpt(messages: list[dict], system: str):
     for m in messages:
         oai_messages.append({"role": m["role"], "content": m["content"]})
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         async with client.stream(
             "POST", "https://api.openai.com/v1/chat/completions",
             headers={
@@ -352,6 +366,12 @@ async def chat_stream(req: ChatRequest):
     session_id = req.session_id or str(uuid.uuid4())
     vertical_key = req.vertical if req.vertical in VERTICALS else "chef"
     v = VERTICALS[vertical_key]
+
+    # Session cleanup: if sessions dict exceeds 1000 entries, remove oldest half
+    if len(sessions) > 1000:
+        to_remove = sorted(sessions.keys())[:500]
+        for sid in to_remove:
+            del sessions[sid]
 
     if session_id not in sessions:
         sessions[session_id] = {"messages": [], "turn_count": 0, "last_ad_turn": -3, "vertical": vertical_key}

@@ -572,7 +572,7 @@ function addAd(ad) {
     <div class="ad-badge"><svg viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="4" height="12" rx="1" fill="#6366f1"/><rect x="6" y="5" width="4" height="9" rx="1" fill="#818cf8"/><rect x="11" y="1" width="4" height="13" rx="1" fill="#a78bfa"/></svg>SPONSORED</div>
     <div class="ad-content">${img}<div class="ad-text">
       <div class="ad-headline">${esc(ad.headline)}</div><div class="ad-desc">${esc(ad.description)}</div>
-      <a class="ad-cta" href="${esc(ad.cta_url||'#')}" target="_blank" onclick="trackClick('${ad.impression_id}')">${esc(ad.cta_text||'Learn More')}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg></a>
+      <a class="ad-cta" href="${esc(ad.cta_url||'#')}" target="_blank" rel="noopener noreferrer" onclick="trackClick('${ad.impression_id}')">${esc(ad.cta_text||'Learn More')}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg></a>
     </div></div>
     <div class="ad-footer"><span class="ad-powered">Served by PromptBid</span><button class="ad-close" onclick="this.closest('.ad-card').style.opacity='0';setTimeout(()=>this.closest('.ad-card').remove(),300)">Dismiss</button></div>`;
   chatInner.appendChild(card); scroll();

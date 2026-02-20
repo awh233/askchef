@@ -1,11 +1,11 @@
-# AskChef — AI Cooking Assistant with PromptBid Ads
+# PromptBid Demo — AI Assistants with Native Ads
 
-A demo app showing the complete PromptBid SDK integration. AskChef is an AI cooking assistant powered by Claude or ChatGPT that serves native ads mid-conversation via PromptBid's real-time auction.
+A multi-vertical demo app showing the complete PromptBid SDK integration. Features 8 AI assistants (AskChef, FitCoach, TravelGuru, MoneyMentor, CodePilot, HomeHelper, StudyBuddy, PetPal) powered by ChatGPT that serve native ads mid-conversation via PromptBid's real-time auction.
 
 ## How It Works
 
-1. User sends a cooking question
-2. Backend calls Claude or ChatGPT for the AI response
+1. User sends a question to their chosen vertical
+2. Backend calls ChatGPT for the AI response with vertical-specific system prompt
 3. Backend fires a bid request to PromptBid with conversation context (categories, keywords)
 4. If an ad wins the auction, it's returned alongside the AI response
 5. Frontend renders the ad as a native card in the conversation
@@ -21,13 +21,12 @@ pip install -r requirements.txt
 ### 2. Set environment variables
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...       # For Claude responses
-export OPENAI_API_KEY=sk-...              # For ChatGPT responses
+export OPENAI_API_KEY=sk-...              # ChatGPT API key from OpenAI
 export PROMPTBID_API_KEY=pb_live_...      # Builder API key from PromptBid
 export PROMPTBID_BASE_URL=http://localhost:8080  # Or https://promptbiddev.onrender.com
 ```
 
-You need at least one AI key (Claude or ChatGPT). The app gracefully handles missing keys.
+The app requires `OPENAI_API_KEY`. The app gracefully handles missing PromptBid key (ads won't display).
 
 ### 3. Run the server
 
@@ -57,17 +56,30 @@ Or manually:
 ## Architecture
 
 ```
-User → AskChef UI (browser) → FastAPI backend → Claude/ChatGPT APIs
-                                    ↓
-                              PromptBid API
-                             (bid request)
-                                    ↓
-                          Native Ad → UI
+User → AI Assistant UI (browser) → FastAPI backend → ChatGPT API
+                                           ↓
+                                     PromptBid API
+                                    (bid request)
+                                           ↓
+                                   Native Ad → UI
 ```
+
+## Verticals
+
+Eight AI assistants, each with category-specific ad targeting:
+
+1. **AskChef** (🍳) — Food & Drink (IAB8)
+2. **FitCoach** (💪) — Sports, Exercise, Nutrition (IAB17)
+3. **TravelGuru** (✈️) — Travel & Tourism (IAB20)
+4. **MoneyMentor** (💰) — Personal Finance (IAB13)
+5. **CodePilot** (⚡) — Technology (IAB19)
+6. **HomeHelper** (🏠) — Home & Garden (IAB10)
+7. **StudyBuddy** (📚) — Education (IAB5)
+8. **PetPal** (🐾) — Pets (IAB16)
 
 ## Ad Integration Details
 
 - **Format**: OpenRTB 2.6 native ads
-- **Targeting**: Food & Drink categories (IAB8), keywords extracted from conversation
+- **Targeting**: Category + keywords extracted from conversation
 - **Frequency**: Ads shown roughly every 3rd exchange to keep the experience natural
 - **Tracking**: Impression pixels fire on ad visibility, clicks tracked via PromptBid API
