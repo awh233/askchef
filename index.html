@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1">
 <title>PromptBid Demo — AI Assistants with Native Ads</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -226,11 +226,86 @@
 
   /* ── RESPONSIVE ── */
   @media (max-width: 640px) {
-    .header { padding: 0 12px; } .header-right .pb-badge { display: none; }
-    .vertical-bar { padding: 6px 12px; } .chat-inner { padding: 14px 12px 100px; }
-    .input-area { padding: 0 12px 12px; } .suggestions { grid-template-columns: 1fr; }
-    .welcome h1 { font-size: 26px; } .ad-card { margin-left: 0; }
-    .msg-avatar { width: 26px; height: 26px; font-size: 11px; border-radius: 8px; }
+    /* Header: compact, no wasted space */
+    .header { padding: 0 12px; height: 48px; }
+    .logo { width: 32px; height: 32px; font-size: 16px; border-radius: 9px; }
+    .header-left { gap: 8px; }
+    .app-title { font-size: 14px; }
+    .app-subtitle { font-size: 9px; }
+    .header-center { display: none; }
+    .header-right .pb-badge { display: none; }
+    .header-right { gap: 6px; }
+    .status-indicator { font-size: 9px; }
+
+    /* Vertical bar: bigger touch targets, momentum scroll */
+    .vertical-bar { padding: 6px 12px; gap: 6px; -webkit-overflow-scrolling: touch; }
+    .v-chip { padding: 8px 14px; font-size: 13px; min-height: 36px; }
+    .v-chip-icon { font-size: 15px; }
+
+    /* Welcome: don't hog the screen */
+    .welcome { min-height: 40vh; gap: 12px; padding: 0 8px; }
+    .welcome-logo { width: 56px; height: 56px; font-size: 28px; border-radius: 16px; }
+    .welcome h1 { font-size: 22px; }
+    .welcome p { font-size: 13px; max-width: 320px; }
+    .suggestions { grid-template-columns: 1fr; gap: 6px; max-width: 100%; }
+    .suggestion { padding: 14px 12px; font-size: 13px; min-height: 44px; border-radius: 12px; }
+    .suggestion-icon { font-size: 16px; }
+
+    /* Chat area */
+    .chat-inner { padding: 10px 10px 20px; gap: 2px; }
+
+    /* Messages: smaller avatars, tighter spacing */
+    .msg-group { margin-top: 10px; }
+    .msg-row { gap: 8px; }
+    .msg-avatar { width: 26px; height: 26px; font-size: 12px; border-radius: 8px; margin-top: 2px; }
+    .msg-bubble { padding: 10px 12px; font-size: 13px; line-height: 1.6; border-radius: 14px; }
+    .msg-row.user .msg-bubble { max-width: 82%; border-bottom-right-radius: 4px; }
+    .msg-row.bot .msg-bubble { border-bottom-left-radius: 4px; }
+    .msg-row.bot .msg-bubble pre { padding: 10px; margin: 8px 0; }
+    .msg-row.bot .msg-bubble pre code { font-size: 11px; }
+    .msg-row.bot .msg-bubble code { font-size: 11px; }
+
+    /* Ad cards: full width */
+    .ad-card { margin-left: 0; margin-right: 0; padding: 12px 14px; border-radius: 12px; }
+    .ad-headline { font-size: 13px; }
+    .ad-desc { font-size: 11px; margin-bottom: 10px; }
+    .ad-content { gap: 10px; }
+    .ad-image { width: 60px; height: 60px; border-radius: 6px; }
+    .ad-cta { padding: 8px 14px; font-size: 11px; min-height: 36px; }
+
+    /* Input area: safe area for notched phones */
+    .input-area { padding: 0 10px calc(env(safe-area-inset-bottom, 8px) + 8px); }
+    .input-area::before { height: 24px; top: -24px; }
+    .input-row { border-radius: 12px; padding: 4px 4px 4px 12px; }
+    .input-field { font-size: 16px; padding: 10px 0; } /* 16px prevents iOS zoom */
+    .send-btn { width: 40px; height: 40px; border-radius: 10px; }
+    .send-btn svg { width: 18px; height: 18px; }
+    .input-hint { font-size: 9px; gap: 10px; margin-top: 6px; }
+
+    /* Config banner */
+    .config-banner { font-size: 10px; padding: 6px 12px; }
+  }
+
+  /* Extra small phones (iPhone SE, etc.) */
+  @media (max-width: 375px) {
+    .header { height: 44px; }
+    .logo { width: 28px; height: 28px; font-size: 14px; }
+    .app-title { font-size: 13px; }
+    .welcome h1 { font-size: 20px; }
+    .welcome-logo { width: 48px; height: 48px; font-size: 24px; }
+    .v-chip { padding: 7px 10px; font-size: 12px; }
+    .suggestion { padding: 12px 10px; font-size: 12px; }
+  }
+
+  /* Landscape mobile */
+  @media (max-height: 500px) {
+    .welcome { min-height: 30vh; gap: 8px; }
+    .welcome-logo { width: 40px; height: 40px; font-size: 20px; }
+    .welcome h1 { font-size: 18px; }
+    .welcome p { display: none; }
+    .header { height: 40px; }
+    .vertical-bar { padding: 4px 12px; }
+    .v-chip { padding: 5px 10px; min-height: 28px; font-size: 11px; }
   }
 </style>
 </head>
@@ -390,9 +465,12 @@ function switchVertical(key) {
   document.documentElement.style.setProperty('--accent', v.color);
   messageInput.placeholder = placeholders[key] || 'Ask me anything...';
 
-  // Update chips
-  document.querySelectorAll('.v-chip').forEach(c => c.classList.toggle('active', c.dataset.key === key));
-  messageInput.focus();
+  // Update chips and scroll active into view
+  document.querySelectorAll('.v-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.key === key);
+    if (c.dataset.key === key) c.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  });
+  if (window.innerWidth > 640) messageInput.focus();
 }
 
 async function sendMessage() {
